@@ -10,6 +10,7 @@
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE TypeApplications #-}              -- use @ symbol
 
 -- 2. imports external/imports
 
@@ -83,6 +84,25 @@ import Plutarch.Context (
   withStakingCredential,
   withValue,
   withdrawal,
+ )
+
+
+import Test.Tasty (TestTree, defaultMain, testGroup)
+import Plutarch.Test.Precompiled (
+  Expectation (Failure, Success),
+  testEqualityCase,
+  testEvalCase,
+  tryFromPTerm,
+  withApplied,
+  (@!>),
+  (@&),
+  (@>),
+ )
+import GHC.IO.Encoding (setLocaleEncoding, utf8)
+import Plutarch (
+  Config (Config, tracingMode),
+  TracingMode (NoTracing),
+  compile,
  )
 -- import qualified Prelude                                as P
 -- Unit testing
@@ -238,9 +258,9 @@ pcrowdValidatorTest = phoistAcyclic $ plam $ \ph dat redeemer ctx -> unTermCont 
     --   -- ((plength # (pfromData signatories)) #== 1)   -- succeeded finally!
     --   -- ((phead # sig) #== ph)
       ( pif 
-        (pfromData datF.actualtargetAmountsoFar #<= ( pfromData datF.targetAmount))
+        (pfromData datF.actualtargetAmountsoFar #>= ( pfromData datF.targetAmount))
         (pconstant ()) -- (pconstant True) -- 
-        perror -- ptraceError "targetAmount" -- 
+        (ptraceError "targetAmount") -- perror -- (ptraceError "x shouldn't be 10")
       )
       -- (pconstant ())
       perror -- (pconstant ()) -- perror --  -- perror
@@ -545,7 +565,7 @@ mockCtxV2 =
 
 -- evalWithArgsT (pcrowdValidatorW) [PlutusTx.toData datumCrowdBuiltin, PlutusTx.toData redeemCrowdCloseBuiltin, PlutusTx.toData mockCtx]
 
--- evalWithArgsT (pcrowdValidatorTest # pubKeyHash) [PlutusTx.toData datumCrowdBuiltin, PlutusTx.toData redeemCrowdCloseBuiltin, PlutusTx.toData mockCtx]
+-- evalWithArgsT (pcrowdValidatorTest # pubKeyHash) [PlutusTx.toData datumCrowdBuiltin, PlutusTx.toData redeemCrowdCloseBuiltin, PlutusTx.toData mockCtxV2]
 
 
 
@@ -1167,3 +1187,59 @@ fieldsOf = plam $ \x -> psndBuiltin #$ pasConstr # x
 --   (\(res, budg, trcs) -> (unScript res, budg, trcs))
 --     <$> evalWithArgsT x args
 
+
+
+-- sampleValidatorTest :: TestTree
+-- sampleValidatorTest = tryFromPTerm "sample validator" sampleValidator $ do
+--   [PlutusTx.toData (), PlutusTx.toData (1 :: Integer), PlutusTx.toData ()] @> "It should succeed when given 1"
+
+pcrowdValidatorWTest :: TestTree
+pcrowdValidatorWTest = tryFromPTerm "sample validator" (pcrowdValidatorW # (pdata pubKeyHashTest1)) $ do
+  [PlutusTx.toData datumCrowdBuiltin, PlutusTx.toData redeemCrowdCloseBuiltin, PlutusTx.toData mockCtxV2] @> "It should succeed when given 1"
+
+  -- [PlutusTx.toData ()] @& do
+  --   testEvalCase
+  --     "(Sharing first argument) It should succeed when given 1"
+  --     Success
+  --     [PlutusTx.toData (1 :: Integer), PlutusTx.toData ()]
+
+  -- withApplied [PlutusTx.toData ()] $ do
+  --   testEvalCase
+  --     "(Sharing first argument) It should fail when given 10"
+  --     Failure
+  --     [PlutusTx.toData (10 :: Integer), PlutusTx.toData ()]
+
+
+main :: IO ()
+main = do
+  setLocaleEncoding utf8
+  defaultMain $
+    testGroup
+      "test suite"
+      [ pcrowdValidatorWTest
+      -- , sampleFunctionTest
+      ]
+
+-- Success Case 
+-- ghci> main
+-- test suite
+--   sample validator
+--     It should succeed when given 1: OK
+
+-- All 1 tests passed (0.01s)
+-- *** Exception: ExitSuccess
+
+
+-- Failure case
+-- ghci> main
+-- test suite
+--   sample validator
+--     It should succeed when given 1: FAIL (0.02s)
+--       Expected a successful run, but failed instead.
+--       Error
+--                                                          An error has occurred:  User error:
+--       The machine terminated because of an error, either from a built-in function or from an explicit use of 'error'.Logs
+--                 "targetAmount"
+
+-- 1 out of 1 tests failed (0.02s)
+-- *** Exception: ExitFailure 1

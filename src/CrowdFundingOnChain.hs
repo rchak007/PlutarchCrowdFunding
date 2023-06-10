@@ -264,36 +264,73 @@ pcrowdValidatorTest = phoistAcyclic $ plam $ \ph dat redeemer ctx -> unTermCont 
   datumOnUtxo <- pletFieldsC @'["beneficiary", "deadline", "aCurrency", "aToken", "targetAmount", "actualtargetAmountsoFar", "contributorsMap"] outDatum 
      -- we need to check that the value has Datum
   pure $
-    -- (pconstant ())
-    pif 
-      -- validation#15  
-      (pelem # (datF.beneficiary) #  sigs ) -- signatories ) -- pfromData signatories)
-    --   -- (pelem # ph # sigs)
-    --   -- ((plength # sigs) #== 0)   -- fail
-    --   -- ((plength # (pfromData signatories)) #== 1)   -- succeeded finally!
-    --   -- ((phead # sig) #== ph)
-      ( pif 
-        -- validation#14
-        -- datumOnUtxo checks the datum on UTXO and compares the TargetAmount and what ActualTargetAmountSoFar
-        -- datF is what's passed to validator in Datum
-        (pfromData datF.actualtargetAmountsoFar #>= ( pfromData datF.targetAmount) #&&
-            pfromData datumOnUtxo.actualtargetAmountsoFar #>= ( pfromData datumOnUtxo.targetAmount) #&& 
-               pfromData datumOnUtxo.actualtargetAmountsoFar #>= ( pfromData datumOnUtxo.actualtargetAmountsoFar) )
---        validation#13
-          -- traceIfFalse "UTXO being spend values are not matching based on Datum" correctInputValueClose
-          --          Need to get the Datum's actual contribution and match it to the value also.
-        
-        ( pif
-            ( (pvalueOf # ownInputF.value # datumOnUtxo.aCurrency # datumOnUtxo.aToken #== 1)   #&&
-                (plovelaceValueOf # ownInputF.value  #== datumOnUtxo.actualtargetAmountsoFar) )    -- Curr Symbol and Token qty is only 1
-            (pconstant ()) -- (pconstant True) -- 
-            (ptraceError "Currency Symb and Token qty not equal to 1") -- perror -- (ptraceError "x shouldn't be 10")
+      -- pif
+        -- (pvalueOf # ownInputF.value # datumOnUtxo.aCurrency # datumOnUtxo.aToken #== 1)
+        (pmatch redeemer $ \case
+          PClose _ -> 
+            pif 
+              -- validation#15 
+              (pelem # (datF.beneficiary) #  sigs ) -- signatories ) -- pfromData signatories)
+              -- (pvalueOf # ownInputF.value # datumOnUtxo.aCurrency # datumOnUtxo.aToken #== 1)
+              ( pif 
+                  -- validation#14 
+                  -- datumOnUtxo checks the datum on UTXO and compares the TargetAmount and what ActualTargetAmountSoFar
+                  -- datF is what's passed to validator in Datum
+                  (pfromData datF.actualtargetAmountsoFar #>= ( pfromData datF.targetAmount) #&&
+                    pfromData datumOnUtxo.actualtargetAmountsoFar #>= ( pfromData datumOnUtxo.targetAmount) #&& 
+                       pfromData datumOnUtxo.actualtargetAmountsoFar #>= ( pfromData datumOnUtxo.actualtargetAmountsoFar) )
+                  ( pif 
+-- --                  validation#13
+--                   --  traceIfFalse "UTXO being spend values are not matching based on Datum" correctInputValueClose
+--                   --          Need to get the Datum's actual contribution and match it to the value also.
+                      ( (pvalueOf # ownInputF.value # datumOnUtxo.aCurrency # datumOnUtxo.aToken #== 1)   #&&
+                        (plovelaceValueOf # ownInputF.value  #== datumOnUtxo.actualtargetAmountsoFar) )    -- Curr Symbol and Token qty is only 1
+                      (pconstant ())
+                      (ptraceError "Input UTXO values are not equal to Datum actual target amount so far")
+                  )
+                  (ptraceError "targetAmount not reached on the Datums")
+              )
+              (ptraceError "Beneficiary signature not correct")
+          PContribute pc -> 
+            perror
         )
-        -- 
-        (ptraceError "targetAmount not reached on the Datums") -- perror -- (ptraceError "x shouldn't be 10")
-      )
-      -- (pconstant ())
-      perror -- (pconstant ()) -- perror --  -- perror
+        -- perror
+            -- pif 
+            --   -- validation#15  
+            --   (pelem # (datF.beneficiary) #  sigs ) -- signatories ) -- pfromData signatories)
+            -- --   -- (pelem # ph # sigs)
+            -- --   -- ((plength # sigs) #== 0)   -- fail
+            -- --   -- ((plength # (pfromData signatories)) #== 1)   -- succeeded finally!
+            -- --   -- ((phead # sig) #== ph)
+            --   ( pif 
+            --     -- validation#14 
+            --     -- datumOnUtxo checks the datum on UTXO and compares the TargetAmount and what ActualTargetAmountSoFar
+            --     -- datF is what's passed to validator in Datum
+                -- (pfromData datF.actualtargetAmountsoFar #>= ( pfromData datF.targetAmount) #&&
+                --     pfromData datumOnUtxo.actualtargetAmountsoFar #>= ( pfromData datumOnUtxo.targetAmount) #&& 
+                --        pfromData datumOnUtxo.actualtargetAmountsoFar #>= ( pfromData datumOnUtxo.actualtargetAmountsoFar) )
+        
+-- --                validation#13
+--                   -- traceIfFalse "UTXO being spend values are not matching based on Datum" correctInputValueClose
+--                   --          Need to get the Datum's actual contribution and match it to the value also.
+--                 ( pif
+--                     ( (pvalueOf # ownInputF.value # datumOnUtxo.aCurrency # datumOnUtxo.aToken #== 1)   #&&
+--                         (plovelaceValueOf # ownInputF.value  #== datumOnUtxo.actualtargetAmountsoFar) )    -- Curr Symbol and Token qty is only 1
+        
+--                     -- Validation 16 -- make sure only Ada and oue CrowdFund token is there and nothing else. 
+--                     --    we dont want 1000 other tokens to be deposited etc
+--                     ( pif
+--                       (pvalueOf # ownInputF.value  #== 1)
+--                       (pconstant ())
+--                       (ptraceError "Currency Symb and Token qty not equal to 1") 
+--                     )
+--                     (ptraceError "Currency Symb and Token qty not equal to 1") -- perror -- (ptraceError "x shouldn't be 10")
+--                 )
+--                 -- 
+--                 (ptraceError "targetAmount not reached on the Datums") -- perror -- (ptraceError "x shouldn't be 10")
+--               )
+--               -- (pconstant ())
+--               perror -- (pconstant ()) -- perror --  -- perror
 
 
 
@@ -629,6 +666,20 @@ mapValueCsTk = fromList [(dCurrencySymbol, tokenMap)]
 tokenMap :: Map TokenName Integer
 tokenMap = fromList [(dToken, 1)]
 
+pint1 :: Term s PInteger
+pint1 = pconstant 1
+
+-- -- valueCsTk1 :: PValue
+-- valueCsTk1 :: 
+--   forall 
+--     (keys :: KeyGuarantees)
+--     (amounts :: AmountGuarantees)
+--     (s :: S). 
+--   Term s ( PValue keys amounts )
+
+-- valueCsTk1 = PValue crowdCurrSymb crowdTokenName pint1
+
+-- valueCsTk1 = PValue SmapValueCsTk
 
 
 scripAddr1 :: BuiltinByteString
@@ -1239,6 +1290,23 @@ pluBuiltListPair = pcons # built3 #$ pcons # built56 #$ pcons # built78 # pnil
 -- (DefaultUniApply (DefaultUniApply DefaultUniProtoPair DefaultUniData) DefaultUniData)) [(I 3,I 4),(I 5,I 6),(I 7,I 8)]))}},
 -- ExBudget {exBudgetCPU = ExCPU 1093112, exBudgetMemory = ExMemory 3192},[])
 
+
+-- PMap
+-- newtype PMap (keysort :: KeyGuarantees) (k :: PType) (v :: PType) (s :: S)
+-- contructor - 
+-- PMap (Term s (PBuiltinList (PBuiltinPair (PAsData k)  (PAsData v))))
+
+-- kSort :: KeyGuarantees
+-- kSort = Sorted
+
+-- kSortPAs = pdata kSort
+
+-- -- pmap1 :: PMap (keysort :: KeyGuarantees) (k :: PType) (v :: PType) (s :: S)
+
+
+
+
+
 -- this will take Pbuiltinlist of Pair and extract lets says First part only puts it in PBuiltinList
 extractPBuiltInList :: Term s ( (PBuiltinList (PBuiltinPair (PAsData PInteger) (PAsData PInteger))) :--> PBuiltinList (PAsData PInteger))
 extractPBuiltInList = phoistAcyclic $
@@ -1370,7 +1438,16 @@ int3FromPas = pfromData fst3
 --   :: forall {s :: S}.
 --      Term s (PBuiltinPair (PAsData PInteger) (PAsData PInteger))
 
+myCrowdCurrTokenValue = Plutarch.Api.V1.Value.psingleton # (pcrowdCurrSymb) # ( pcrowdTokenName) # pint1ghci> evalT myCrowdCurrTokenValue
+-- Right (Script {unScript = Program {_progAnn = (), _progVer = Version () 1 0 0, _progTerm = Constant () (Some (ValueOf (DefaultUniApply DefaultUniProtoList (DefaultUniApply (DefaultUniApply DefaultUniProtoPair DefaultUniData) DefaultUniData)) 
+-- [(B "\219\186\180|\246\DLE\146\GS\184\226f\195t|\211\147\219o\157K~\184\227H\221\235\&9q",Map [(B "CrowdFundingToken",I 1)])]))}},
+--ExBudget {exBudgetCPU = ExCPU 2297429, exBudgetMemory = ExMemory 7558},[])
 
+
+pcrowdTokenName :: (Term s PTokenName)
+pcrowdTokenName = pconstant "CrowdFundingToken"
+pcrowdCurrSymb :: (Term s PCurrencySymbol)
+pcrowdCurrSymb = pconstant "dbbab47cf610921db8e266c3747cd393db6f9d4b7eb8e348ddeb3971"
 
 
 crowdAddress :: (Term s PByteString)
@@ -1379,6 +1456,16 @@ crowdAddressBuilt = pdata crowdAddress
 
 crowdCurrSymb :: forall {s :: S}. PCurrencySymbol s
 crowdCurrSymb = PCurrencySymbol crowdName
+
+
+-- crowdTokenPair = ppairDataBuiltin # ( crowdNameBuilt) # (pdata pint1)
+
+-- crowdTokenPairList :: Term s (PBuiltinList (PBuiltinPair (PAsData PByteString) (PAsData PInteger)))
+-- crowdTokenPairList = pcons # crowdTokenPair # pnil
+-- pmap1 = PMap crowdTokenPairList
+
+
+-- crowdCurrTokenPair = ppairDataBuiltin # ( crowdAddress) # (crowdTokenPairList)
 
 crowdName :: (Term s PByteString)
 crowdName = pconstant "CrowdFundingToken"

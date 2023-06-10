@@ -42,9 +42,128 @@ To put things into perspective, one validator script from a large production con
 
 
 
-#### Plutarch validator
+#### Plutarch validator - Crowd Funding Smart contract 
 
-This is a simple validator where it matches the existing Datum number with Redeemer number, and if its equal then it unlocks the funds. Again this is a trivial example as we inline the Datum so its actually visible but ideally it should be hashed.
+
+
+This smart contact will help anyone who wants to raise money through Crowd Funding on public block-chain Cardano. Its generic Smart contract so anyone can use it to raise Funds. So it can be used to run as many Crowd Funding ventures as needed by anyone.  
+
+The methodology used is an unique one and only NFT will always be present on UTXO that will gather all the crowd funded Ada. The very first time the Beneficiary (or anyone can too specifying a Beneficiary who will collect the funds) starts off with depositing an NFT at the script to kick off the Crowd Funding venture. This is the initial UTXO with NFT. This NFT is our thread token that will track this particular Crowd Funding venture.
+
+When a contributor wants to contribute they will spend this unique UTXO with NFT and write it back to script with this NFT with any Ada already present and additionally the amount they are contributing. This is serialized in this way to keep track of Target amount. 
+
+In the end once target is met and deadline is passed the Beneficiary can collect the funds.
+
+The OnChain code will do all the validations necessary so this execution happens  and provide necessary safe guards and no other malicious actors can hijack the contract and drain money etc. 
+
+
+
+
+
+![image-20230222112832909](Images/image-20230222112832909.png)
+
+
+
+#### On-Chain 
+
+The UTXO at the script will carry this information on a Datum as a State of the crowd funding venture.
+
+
+
+[`CrowdFundingOnChain.hs`](https://github.com/rchak007/PlutarchCrowdFunding/blob/main/src/CrowdFundingOnChain.hs)
+
+##### Crowd Funding State (Datum)
+
+1. Beneficiary 
+   1. Beneficiary is the person who will get the funds raised by this contract. This is represented by public hash key of the Beneficiary wallet address. Only this address can get the funds.
+   2. Only if the target is reached the Beneficiary can collect the amount and also past the Deadline
+2. Deadline - will allow us to set a deadline for the Fund contribution and also collection. 
+3. A unique one and only NFT will  manage this contract. The NFT will always sit at the UTXO that has all the Ada being collected at the script.
+4. Contributors 
+   1. Contributors can contribute to this Smart contract until the deadline is reached
+   2. Smart contract will also keep track of who is contributing through the Contributor's public key hash and also amount they contribute. 
+5. Target amount - a target amount is first specified by the beneficiary as the goal of the Crowd Funding contract. If this is not reached the Beneficiary cannot withdraw amounts.
+6. Actual Target Amount so far - this represents how much was collected so far
+
+
+
+This Crowd Funding smart contract is developed on Cardano blockchain using `Plutarch`.
+
+This same contract can be used for multiple Crowd Funding ventures by anyone.
+
+```haskell
+data PDat (s :: S) = 
+    PDat 
+      ( Term 
+          s 
+          ( PDataRecord 
+          '["beneficiary" ':= (PPubKeyHash)
+          -- '["beneficiary" ':= (PAsData PPubKeyHash)
+          , "deadline" ':= PPOSIXTime
+          , "aCurrency" ':= PCurrencySymbol
+          , "aToken" ':= PTokenName
+          , "targetAmount" ':= PInteger
+          , "actualtargetAmountsoFar" ':= PInteger
+          , "contributorsMap" ':= PBuiltinList (PAsData (PTuple (PAsData PPubKeyHash) PInteger)) ] ))
+ deriving stock (Generic)
+ deriving anyclass (PlutusType, PIsData, PDataFields)
+```
+
+We represent this above Crowd Funding State as a UTxO. The UTxO sits at the script address of the Crowd Fund smart contract, and its datum field it carries the current state of the crowd funding data.
+
+Since validation only happens when you want to consume something from a script address, not when you produce an output at a script address. This means that we can’t prevent anybody producing arbitrary outputs at the script address.
+
+Somehow we need to distinguish the true Crowd Fund output from other outputs that may be sitting at the same script address. And the way we do this is to put an NFT on the output. Because an NFT can only exist once, there can only be one UTxO at the script address that holds the NFT.
+
+
+
+Now, the Crowd Funding validator has to check several things.
+
+1. Is the NFT present in the consumed input?
+2. Is there an output from the transaction at the same address containing the same NFT?
+3. Is the value in the output UTxO the same as the input value?
+4. Is the fee present?
+
+Now we can complete the transaction.
+
+
+
+##### Crowd Funding Redeem Actions
+
+Redeem actions are Contribute and Close.
+
+
+
+
+
+
+
+```haskell
+data Redeem = Contribute 
+    {
+        contribution :: (Ledger.PaymentPubKeyHash,Integer)
+    } 
+              | Close 
+    deriving P.Show
+```
+
+
+
+###### Contribute 
+
+With this redeem action Contribtute a contributor will provide their pubKeyHash and amount they are contributing.
+
+Also since we write the script UTXO we consume back the script we need to provide the new Datum too and this Datum's fields need to reflect the correct Value being added. So the new Datum, Redeem and actual value at script UTXO (NFT + already held Value + new contribution) should all be correctly formed. otherwise there will be error.
+
+Note- deadline reached was commented out to make it easier for testing. But in real contracts we will have this turned on.
+
+
+
+###### Close
+
+Beneficiary can collect all the Ada from Crowd Fund contract when Target Amount is met and deadline is passed.
+
+
 
 
 

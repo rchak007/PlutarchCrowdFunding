@@ -135,6 +135,7 @@ library
     , plutarch-unit
     , QuickCheck
     , containers
+    -- , plutus-script-utils
 
   hs-source-dirs:  src
 

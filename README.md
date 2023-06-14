@@ -139,12 +139,15 @@ Redeem actions are Contribute and Close.
 
 
 ```haskell
-data Redeem = Contribute 
-    {
-        contribution :: (Ledger.PaymentPubKeyHash,Integer)
-    } 
-              | Close 
-    deriving P.Show
+data PRedeem (s :: S) = 
+      PContribute 
+        ( Term 
+          s 
+          ( PDataRecord 
+          '["contribution" ':= PInteger])) 
+      | PClose (Term s (PDataRecord '[]))
+ deriving stock (Generic)
+ deriving anyclass (PlutusType, PIsData, PEq, PShow)
 ```
 
 

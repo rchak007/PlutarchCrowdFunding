@@ -115,7 +115,7 @@ library
     , cardano-binary
     , data-default
     , plutarch
-    -- , plutarch-extra
+    , plutarch-extra
     , liqwid-plutarch-extra
     , plutus-core
     , plutus-ledger-api

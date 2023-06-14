@@ -18,7 +18,7 @@ module CrowdFundingOnChain (pcrowdValidatorW) where
 
 -- from DAOValidator
 import Plutarch.Api.V2 
--- import Plutarch.Api.V1 (PCredential (PPubKeyCredential, PScriptCredential))
+import Plutarch.Api.V1 (PCredential (PPubKeyCredential, PScriptCredential))
 -- import Plutarch.Api.V1 
 import Plutarch.DataRepr
 import Plutarch.Api.V1.Value 
@@ -46,6 +46,10 @@ import UntypedPlutusCore (DeBruijn, DefaultFun, DefaultUni, Program, progTerm)
 import PlutusCore.MkPlc (mkIterApp, mkConstant) 
 import Data.Bifunctor (first)
 import Data.ByteString.Short (ShortByteString)
+import Plutarch.Api.V1.Tuple
+
+import Plutarch.Extra.Time
+import Plutarch.Extra.Applicative (PApply (pliftA2))
 
 import PlutusLedgerApi.V2
 import qualified PlutusLedgerApi.V2 as LedgerApiV2
@@ -61,34 +65,37 @@ import PlutusTx.AssocMap
 -- import qualified Ledger.Ada                                      as Ada
 -- import Plutus.Script.Utils.Ada
 
+import Plutarch.Extra.Maybe (pjust, pmaybe, pnothing)
+import Plutarch.Extra.Field (pletAll, pletAllC)
 import Plutarch.Trace
-import Plutarch.Context (
-  BaseBuilder,
-  Builder,
-  address,
-  buildMinting,
-  buildMinting',
-  buildSpending,
-  buildTxInfo,
-  buildTxOuts,
-  checkNormalized,
-  input,
-  mint,
-  mkNormalized,
-  normalizeValue,
-  output,
-  pubKey,
-  runChecker,
-  script,
-  withDatum,
-  withMinting,
-  withRefIndex,
-  withRefTxId,
-  withSpendingUTXO,
-  withStakingCredential,
-  withValue,
-  withdrawal,
- )
+import Plutarch.Context
+-- import Plutarch.Context (
+--   BaseBuilder,
+--   Builder,
+--   address,
+--   buildMinting,
+--   buildMinting',
+--   buildSpending,
+--   buildTxInfo,
+--   buildTxOuts,
+--   checkNormalized,
+--   input,
+--   mint,
+--   mkNormalized,
+--   normalizeValue,
+--   output,
+--   pubKey,
+--   runChecker,
+--   script,
+--   withDatum,
+--   withMinting,
+--   withRefIndex,
+--   withRefTxId,
+--   withSpendingUTXO,
+--   withStakingCredential,
+--   withValue,
+--   withdrawal,
+--  )
 
 
 import Test.Tasty (TestTree, defaultMain, testGroup)
@@ -137,6 +144,7 @@ data PDat (s :: S) =
           , "targetAmount" ':= PInteger
           , "actualtargetAmountsoFar" ':= PInteger
           , "contributorsMap" ':= PBuiltinList (PAsData (PTuple (PAsData PPubKeyHash) PInteger)) ] ))
+          -- , "contributorsMap" ':= PBuiltinList  ( PBuiltinPair (PAsData PPubKeyHash) (PAsData PInteger)) ] ))
  deriving stock (Generic)
  deriving anyclass (PlutusType, PIsData, PDataFields)
 
@@ -237,34 +245,128 @@ instance PTryFrom PData PRedeem
 -- increment :: Term s pInteger -> Term s pInteger
 -- increment = plam (\x -> x + 1)
 
+-- type PProposalTime = PCurrentTime
+--     PInterval iv' <- pmatchC iv
+--     ivf <- pletAllC iv'
+--     PLowerBound lb <- pmatchC ivf.from
+--     PUpperBound ub <- pmatchC ivf.to
+
+--     let lowerBound = pletAll lb $ \f ->
+--           pif
+--             f._1
+--             ( pmatch f._0 $ \case
+--                 PFinite (pfromData . (pfield @"_0" #) -> d) -> pjust # d
+--                 _ -> ptrace "currentProposalTime: time range should be bounded" pnothing
+--             )
 -- -- 3. onchain code
 
 
--- pcrowdValidatorTest :: Term s  (PDat :--> PRedeem :--> PScriptContext :--> PUnit)
-pcrowdValidatorTest :: Term s  (PAsData PPubKeyHash :--> PDat :--> PRedeem :--> PScriptContext :--> PUnit)
+pcrowdValidatorTest :: Term s  (PDat :--> PRedeem :--> PScriptContext :--> PUnit)
+-- pcrowdValidatorTest :: Term s  (PAsData PPubKeyHash :--> PDat :--> PRedeem :--> PScriptContext :--> PUnit)
 -- pcrowdValidatorTest :: Term s  (PPubKeyHash PAsData PDat :--> PAsData PRedeem :--> PAsData PScriptContext :--> PUnit)
 
 -- pcrowdValidator :: Term s PValidator 
-pcrowdValidatorTest = phoistAcyclic $ plam $ \ph dat redeemer ctx -> unTermCont $ do 
--- pcrowdValidatorTest = phoistAcyclic $ plam $ \dat redeemer ctx -> unTermCont $  do 
+-- pcrowdValidatorTest = phoistAcyclic $ plam $ \ph dat redeemer ctx -> unTermCont $ do 
+pcrowdValidatorTest = phoistAcyclic $ plam $ \dat redeemer ctx -> unTermCont $  do 
   ctxF <- pletFieldsC @'["txInfo", "purpose"] ctx
   PSpending ((pfield @"_0" #) -> ownRef) <- pmatchC ctxF.purpose
+
+  PSpending pspnd <- pmatchC ctxF.purpose
+  pSp0 <- pletFieldsC @'["_0"] pspnd
+  -- PTxOutRef pTxoutref0 <- pmatchC pSp0._0
+  -- id0 <- pletFieldsC @'["id"] pTxoutref0  
+  -- PTxId ((pfield @"_0" #) -> pTxId) <- pmatchC id0.id
+
     -- here if a Txn is submitted with more than 1 script UTXO then this validator will be called mutiple times actually each time with 1 script UTXO to spend it.
   datF <- pletFieldsC @'["beneficiary", "deadline", "aCurrency", "aToken", "targetAmount", "actualtargetAmountsoFar", "contributorsMap" ] dat
   let signatories = pfield @"signatories" # ctxF.txInfo
-  infoF <- pletFieldsC @'["inputs", "outputs", "signatories", "data"] ctxF.txInfo
+  infoF <- pletFieldsC @'["inputs", "outputs", "signatories", "validRange"] ctxF.txInfo
+-- below lines practice for subsequent lines to indicate similarity even though done bit differently
+  -- vrF <- pletFieldsC @'["from", "to"] infoF.validRange
+  -- PLowerBound lb0 <- pmatchC vrF.from
+  -- ppos0 <- pletFieldsC @'["_0"] lb0
+  -- PFinite ((pfield @"_0" #) -> pf0) <- pmatchC ppos0._0
+  -----  finalPpos0 <- pletFieldsC @'["_0"] pf0  - this does not work
+  PInterval iv' <- pmatchC infoF.validRange
+  ivf <- pletAllC iv'
+  PLowerBound lb <- pmatchC ivf.from
+  PUpperBound ub <- pmatchC ivf.to
+  lowerBound <- pletAllC lb
+  -- PFinite pf <- pmatchC lowerBound._0
+  PFinite ((pfield @"_0" #) -> pf) <- pmatchC lowerBound._0
+
+  validR <- pletFieldsC @'["from", "to"] infoF.validRange
+  -- upperB <- pletFieldsC @'["_0", "_1"] validR.to
+  -- PFinite ((pfield @"_0" #) -> currTime) <- pmatch upperB
+  -- PSpending ((pfield @"_0" #) -> ownRef)
+  -- pFinite <- pletFieldsC @'["_0"] upperB._0
+  -- let currTimeApprox = pupperBoundCurrentTimeApproximation # infoF.validRange
+  -- let currTimeApprox = plowerBoundCurrentTimeApproximation # infoF.validRange
   sigs :: Term _ (PBuiltinList (PAsData PPubKeyHash)) <- pletC infoF.signatories 
   -- allInputs <- pletC infoF.inputs
   let ownInput = ptryOwnInput # infoF.inputs # ownRef      -- so this actually implicitly is only 1 possible. -- cause each SCript UTXO calls validator each time separately
+  -- let ownInput = ptryOwnInput # infoF.inputs # (pfromData pSp0) 
   -- ownInput - PTxInInfo (Term s (PDataRecord '["outRef" := PTxOutRef, "resolved" := PTxOut]))
   --     Also ownInput should only be 1 and that should have the datum. 
   --     it can have other UTXO not own which are Beneficiary's for collateral eg.
   ownInputF <- pletFieldsC @'["value", "address", "datum"] ownInput 
   let outDatum = pfromPDatum @PDat # (ptryFromInlineDatum # ownInputF.datum)
   datumOnUtxo <- pletFieldsC @'["beneficiary", "deadline", "aCurrency", "aToken", "targetAmount", "actualtargetAmountsoFar", "contributorsMap"] outDatum 
-     -- we need to check that the value has Datum
+  
+
+  -- we construct the Value from Datum - from actualtargetAmountsoFar and our Token
+  -- then we get the input Value on UTXO. the idea is these 2 has to be same. 
+  -- That way no malicious actor can deposit Million tokens and make our script unusable etc.
+  --    We check this on Contribution when we dont let them write back to script with extra tokens
+  --    We also check on the Close. So if its something is malicious then at least later 
+  --          Contributors can take back their funds.
+  --     datumAdaVal is ada value of so far collected funds from the datum at UTXO.
+  let datumAdaVal = Plutarch.Api.V1.Value.psingleton # padaSymbol # padaToken # datumOnUtxo.actualtargetAmountsoFar
+  --     datumCurrSymb is out State token value constructed to compare (so this is expected as we know)
+  let datumCurrSymb = Plutarch.Api.V1.Value.psingleton # (datumOnUtxo.aCurrency) # (datumOnUtxo.aToken) # (pconstant 1)
+  --     datumTotalVal - is constructed value of both Collected so far and our State CrowdFund token
+  --        now we can compare the input Value of UTXO and need to be same.
+  let datumTotalVal = datumAdaVal <> datumCurrSymb
+  --     due to technical types of Input value and Contructed datum value 
+  --            we convert the values to same type to compare
+  let forgetPositiveUTXOInputVal = Plutarch.Api.V1.Value.pforgetPositive ownInputF.value
+  let forgetSortedDatumTotalVal = Plutarch.Api.V1.Value.pforgetSorted datumTotalVal
+
+-- below we also do the same Value construction from Datum passed to validator - 
+--    Technically this should be same as UTXO datum as Cardano network Phase 1 validation should give error
+  let datumAdaVal2 = Plutarch.Api.V1.Value.psingleton # padaSymbol # padaToken # datumOnUtxo.actualtargetAmountsoFar
+  let datumCurrSymb2 = Plutarch.Api.V1.Value.psingleton # (datumOnUtxo.aCurrency) # (datumOnUtxo.aToken) # (pconstant 1)
+  let datumTotalVal2 = datumAdaVal2 <> datumCurrSymb2
+  let forgetSortedDatumTotalVal2 = Plutarch.Api.V1.Value.pforgetSorted datumTotalVal2
+
+
+-- Store the Validaton 1, 2, 13 and 16 as Bool for later as this is common between 
+--     Redeem actions Contribute and Close 
+  let pval_1_2_13_16 =  
+            -- make sure out CrowdFund Symb and token is present and only 1 qty
+            ( (pvalueOf # ownInputF.value # datumOnUtxo.aCurrency # datumOnUtxo.aToken #== 1) #&&
+            -- validate the Input value is same as in Datum which is our state
+              plovelaceValueOf # ownInputF.value  #== datumOnUtxo.actualtargetAmountsoFar   #&&  
+
+            -- Below checks that Value constructed from Datum is equal to what is on UTXO value
+                -- This way we make sure no one has deposited lot of other tokens not relevant.
+                -- the bigger validation of this is when we Contribute so it does not end up on our Script  
+            (forgetPositiveUTXOInputVal #== forgetSortedDatumTotalVal) #&& 
+            ((forgetPositiveUTXOInputVal #== forgetSortedDatumTotalVal2))
+            ) 
+
+  PScriptCredential ((pfield @"_0" #) -> ownValHash) <- pmatchC $ pfield @"credential" # ownInputF.address
+  let ownOutput = pheadSingleton #$ pfilter # (paysToCredential # ownValHash) # infoF.outputs 
+  ownOutputF <- pletFieldsC @'["value", "datum"] ownOutput
+  let outDatum = pfromPDatum @PDat # (ptryFromInlineDatum # ownOutputF.datum)
+  
+  
+  -- Store Validation 6 for later 
+  let pval_6 = 
+            (pvalueOf # ownOutputF.value # datumOnUtxo.aCurrency # datumOnUtxo.aToken #== 1)
+            -- #&& plovelaceValueOf # ownOutputF.value  #== datumOnUtxo.actualtargetAmountsoFar 
+
   pure $
-      -- pif
         -- (pvalueOf # ownInputF.value # datumOnUtxo.aCurrency # datumOnUtxo.aToken #== 1)
         (pmatch redeemer $ \case
           PClose _ -> 
@@ -280,43 +382,60 @@ pcrowdValidatorTest = phoistAcyclic $ plam $ \ph dat redeemer ctx -> unTermCont 
                     pfromData datumOnUtxo.actualtargetAmountsoFar #>= ( pfromData datumOnUtxo.targetAmount) #&& 
                        pfromData datumOnUtxo.actualtargetAmountsoFar #>= ( pfromData datumOnUtxo.actualtargetAmountsoFar) )
                   ( pif 
--- --                  validation#13
---                   --  traceIfFalse "UTXO being spend values are not matching based on Datum" correctInputValueClose
---                   --          Need to get the Datum's actual contribution and match it to the value also.
-                      ( (pvalueOf # ownInputF.value # datumOnUtxo.aCurrency # datumOnUtxo.aToken #== 1)   #&&
-                        (plovelaceValueOf # ownInputF.value  #== datumOnUtxo.actualtargetAmountsoFar) )    -- Curr Symbol and Token qty is only 1
-                      (pconstant ())
-                      (ptraceError "Input UTXO values are not equal to Datum actual target amount so far")
+                       pval_1_2_13_16
+
+                      ( pif 
+--                          validation#17                      
+                            ((datumOnUtxo.deadline) #< (pfromData pf))     -- Datum is less than Slot txn - so deadline passed
+                            -- (datumOnUtxo.deadline #< (pfromData pf0))
+                      --     LedgerIntervalV1.contains (LedgerIntervalV1.from (deadline d)) (Contexts.txInfoValidRange txinfo)
+                            (pconstant ())
+                            (ptraceError "Deadline has not passed")
+                      )
+                            
+
+                      --        validation#17
+                                -- && traceIfFalse "Deadline not yet reached" deadlinepassed                      
+                      (ptraceError "Validation 13, 16 and 1 - Input UTXO values are not equal to Datum actual target amount so far")
                   )
                   (ptraceError "targetAmount not reached on the Datums")
               )
               (ptraceError "Beneficiary signature not correct")
           PContribute pc -> 
-            perror
+            pif 
+          -- Validation # 1      This validates 3 parameters to be equal 
+--             1st parameter - from actual Tx-ins Values , validates that the UTXO with NFT in its Values - 
+--                     bypasses other Tx-in w/o NFT like Fees Tx-in
+--             2nd parameter - Values calculated based on Datum passed to the Validator
+--             3rd parametr - Values calculated from Datum at the UTXO.
+--                    Technically the 2 and 3 should be ensured by Network.
+--            Validation # 2 - check
+--               --Only 1 tx-in with datum allowed- other can be payment address fee etc. which dont have datum
+              -- this below handles both validation 1, 2, 13 and 16
+              pval_1_2_13_16
+              (pconstant ())
+
+              -- validation 6
+              -- extractContribPBuiltInList # listContribPair1
+--           validation#6
+-- --        tx-out - Datum collected amount should be updated with Tx-in amount + contributed amount
+            --  && traceIfFalse "the ContributedSoFar amount has a descrepancy" correctTargetAmountSoFarDatum 
+--                 FOr this validation the Target Amount so far has to increase in the tx-out by contribution amount. So we add that from Redeemer.
+--                 This is only Datum validation. Not value. Thats done with "correctOutputValue"
+              (ptraceError "Validation 13, 16 and 1 - Input UTXO values are not equal to Datum actual target amount so far")
+
+
+
+
+            -- perror
         )
-        -- perror
-            -- pif 
-            --   -- validation#15  
-            --   (pelem # (datF.beneficiary) #  sigs ) -- signatories ) -- pfromData signatories)
-            -- --   -- (pelem # ph # sigs)
-            -- --   -- ((plength # sigs) #== 0)   -- fail
-            -- --   -- ((plength # (pfromData signatories)) #== 1)   -- succeeded finally!
-            -- --   -- ((phead # sig) #== ph)
-            --   ( pif 
-            --     -- validation#14 
-            --     -- datumOnUtxo checks the datum on UTXO and compares the TargetAmount and what ActualTargetAmountSoFar
-            --     -- datF is what's passed to validator in Datum
-                -- (pfromData datF.actualtargetAmountsoFar #>= ( pfromData datF.targetAmount) #&&
-                --     pfromData datumOnUtxo.actualtargetAmountsoFar #>= ( pfromData datumOnUtxo.targetAmount) #&& 
-                --        pfromData datumOnUtxo.actualtargetAmountsoFar #>= ( pfromData datumOnUtxo.actualtargetAmountsoFar) )
-        
--- --                validation#13
---                   -- traceIfFalse "UTXO being spend values are not matching based on Datum" correctInputValueClose
---                   --          Need to get the Datum's actual contribution and match it to the value also.
---                 ( pif
---                     ( (pvalueOf # ownInputF.value # datumOnUtxo.aCurrency # datumOnUtxo.aToken #== 1)   #&&
---                         (plovelaceValueOf # ownInputF.value  #== datumOnUtxo.actualtargetAmountsoFar) )    -- Curr Symbol and Token qty is only 1
-        
+      -- )
+      -- (pconstant ())
+      -- (ptraceError "Validation 13, 16 and 1 - Input UTXO values are not equal to Datum actual target amount so far")
+
+
+
+
 --                     -- Validation 16 -- make sure only Ada and oue CrowdFund token is there and nothing else. 
 --                     --    we dont want 1000 other tokens to be deposited etc
 --                     ( pif
@@ -410,14 +529,14 @@ pcrowdValidatorTest = phoistAcyclic $ plam $ \ph dat redeemer ctx -> unTermCont 
 --     perror
 --   -- pure $ popaque $ pcrowdValidator # dat # redmr # ctx
 
-pcrowdValidatorW :: ClosedTerm (PAsData PPubKeyHash :--> PValidator)
--- pcrowdValidatorW :: ClosedTerm (PValidator)
--- pcrowdValidatorW = plam $ \datum redeemer ctx' -> unTermCont $ do 
-pcrowdValidatorW = plam $ \ph datum redeemer ctx' -> unTermCont $ do 
+-- pcrowdValidatorW :: ClosedTerm (PAsData PPubKeyHash :--> PValidator)
+pcrowdValidatorW :: ClosedTerm (PValidator)
+pcrowdValidatorW = plam $ \datum redeemer ctx' -> unTermCont $ do 
+-- pcrowdValidatorW = plam $ \ph datum redeemer ctx' -> unTermCont $ do 
   (dat, _) <- ptryFromC @PDat datum 
   (redmr, _) <- ptryFromC @PRedeem redeemer 
-  -- pure $ popaque $ pcrowdValidator # dat # redmr # ctx'
-  pure $ popaque $ pcrowdValidatorTest # ph # dat # redmr # ctx'
+  pure $ popaque $ pcrowdValidatorTest # dat # redmr # ctx'
+  -- pure $ popaque $ pcrowdValidatorTest # ph # dat # redmr # ctx'
 
 
 
@@ -437,6 +556,55 @@ pcrowdValidatorW = plam $ \ph datum redeemer ctx' -> unTermCont $ do
 --------------------------------------------------------------- contextBuilding for Unit testing----
 
 
+-- currentProposalTime :: forall (s :: S). Term s (PPOSIXTimeRange :--> PMaybe PPOSIXTimeRange)
+-- currentProposalTime = phoistAcyclic $
+--   plam $ \iv -> unTermCont $ do
+--     PInterval iv' <- pmatchC iv
+--     ivf <- pletAllC iv'
+--     PLowerBound lb <- pmatchC ivf.from
+--     PUpperBound ub <- pmatchC ivf.to
+
+--     let lowerBound = pletAll lb $ \f ->
+--           pif
+--             f._1
+--             ( pmatch f._0 $ \case
+--                 PFinite (pfromData . (pfield @"_0" #) -> d) -> pjust # d
+--                 _ -> ptrace "currentProposalTime: time range should be bounded" pnothing
+--             )
+--             (ptrace "currentProposalTime: lower bound of the time range should be inclusive" pnothing)
+
+--         upperBound = pletAll ub $ \f ->
+--           pmatch f._0 $ \case
+--             PFinite (pfromData . (pfield @"_0" #) -> d) -> pjust # d
+--             _ -> ptrace "currentProposalTime: time range should be bounded" pnothing
+
+--         mkTime = phoistAcyclic $ plam $ pcon .* PCurrentTime
+--     pure $ pliftA2 # mkTime # lowerBound # upperBound
+
+-- "contributorsMap" ':= PBuiltinList (PAsData (PTuple (PAsData PPubKeyHash) PInteger)) ] ))
+-- pGetTotalContribution :: Term s ((PBuiltinList (PAsData (PTuple (PAsData PPubKeyHash) PInteger))) :--> PInteger)
+-- pGetTotalContribution = phoistAcyclic $
+--   plam $ \contr ->
+--     precList (\self x xs -> x $ \ptup -> 
+--       pmatch ptup $ \case 
+--         (psndBuiltin (pbuiltinPairFromTuple # ptup))) # contr
+
+
+
+paysToCredential :: Term s (PScriptHash :--> PTxOut :--> PBool)
+paysToCredential = phoistAcyclic $
+  plam $ \valHash txOut -> unTermCont $ do
+    let txOutCred = pfield @"credential" # (pfield @"address" # txOut)
+    pure $
+      pmatch txOutCred $ \case
+        PScriptCredential txOutValHash -> (pfield @"_0" # txOutValHash) #== valHash
+        PPubKeyCredential _ -> (pcon PFalse)
+
+
+pheadSingleton :: (PListLike list, PElemConstraint list a) => Term s (list a :--> a)
+pheadSingleton = phoistAcyclic $
+  plam $ \xs ->
+    pelimList (\x xs -> (pelimList (\_ _ -> perror) x xs)) perror xs 
 
 ptryOwnInput :: (PIsListLike list PTxInInfo) => Term s (list PTxInInfo :--> PTxOutRef :--> PTxOut)
 ptryOwnInput = phoistAcyclic $
@@ -771,7 +939,7 @@ crTxOutVal13aTest1OutForInput :: LedgerApiV2.TxOut
 crTxOutVal13aTest1OutForInput = LedgerApiV2.TxOut { LedgerApiV2.txOutAddress = crAddress1,
              LedgerApiV2.txOutDatum  = (rawDatToOutputDatum datumCrowdVal13aClose), 
              LedgerApiV2.txOutReferenceScript = Nothing,
-             LedgerApiV2.txOutValue =  ada70 <> minAda <> valueCsTk 
+             LedgerApiV2.txOutValue =  ada70  <> minAda <> valueCsTk 
 
 }
 
@@ -844,7 +1012,8 @@ mockCtxVal13a =
       mempty                                             -- mint
       mempty                                             -- dcert
       myStake1Map                                        -- wdrl   
-      (interval (POSIXTime 1) (POSIXTime 2))             -- validRange
+      (interval (POSIXTime 1671159025000) (POSIXTime 1671159025200))   -- validRange  Datum 1671159023000  -- Success case - as datum deadline LESS than slot - so we passed deadline
+      -- (interval (POSIXTime 1671159021000) (POSIXTime 1671159021200))      -- validRange    Datum 1671159023000  -- Fail case - Datum > Slot
       [beneficiaryHash]                                  -- signatories - txInfoSignatories
       myRedeemer1Map                                     -- redeemers --- txInfoRedeemers
       datumCrowdVal13aMap                                        -- datums
@@ -1258,12 +1427,56 @@ int10 = pconstantData @PInteger 10
 -- built2 :: Term s ( PInteger , PInteger)
 -- built2 =  PBuiltinPair # int1 # int2
 
+--  "contributorsMap" ':= PBuiltinList (PAsData (PTuple (PAsData PPubKeyHash) PInteger)) ] ))
+
+-- ptupleFromBuiltin :: Term s (PAsData (PBuiltinPair (PAsData a) (PAsData b))) -> Term s (PAsData (PTuple a b))
+builtTuple1 = Plutarch.Api.V1.Tuple.ptupleFromBuiltin (built3Pas)
+built3Pas = pdata built3
+
+
+contribPair1 :: Term s (PBuiltinPair (PAsData PPubKeyHash) (PAsData PInteger))
+contribPair1 = ppairDataBuiltin # (pdata pubKeyHashTest1 ) # int4
+
+contribPair2 :: Term s (PBuiltinPair (PAsData PPubKeyHash) (PAsData PInteger))
+contribPair2 = ppairDataBuiltin # (pdata pubKeyHashTest1 ) # int3
+
+
+-- join BuiltinPairs into a PList
+listContribPair1 :: Term s (PBuiltinList (PBuiltinPair (PAsData PPubKeyHash) (PAsData PInteger)))
+listContribPair1 = pcons # contribPair1 #$ pcons # contribPair2 # pnil
+
+intFromContribMap = extractContribPBuiltInList # listContribPair1
+-- ghci> evalT intFromContribMap 
+-- Right (Script {unScript = Program {_progAnn = (), _progVer = Version () 1 0 0, _progTerm = Constant () 
+-- (Some (ValueOf DefaultUniInteger 7))}},
+-- ExBudget {exBudgetCPU = ExCPU 4550562, exBudgetMemory = ExMemory 13248},[])
+
+-- this will take Pbuiltinlist of Pair and extract lets says First part only puts it in PBuiltinList
+extractContribPBuiltInList :: Term s ( (PBuiltinList (PBuiltinPair (PAsData PPubKeyHash) (PAsData PInteger))) :--> PInteger)  -- PBuiltinList (PAsData PInteger))
+extractContribPBuiltInList = phoistAcyclic $
+  pfix #$ plam (\self n ->
+    pmatch n $ \case
+      PCons x xs ->
+        ((pfromData (psndBuiltin # x)) + (self # xs))
+      PNil -> (pconstant 0)
+    -- pif (n #== PCons x xs ) (pcons # x) $ (self xs)
+    --   pif (n #== PNil) (pnil) $
+        
+  )
+
+
+
 int1ToPas = pdata int1
 built3 :: Term s (PBuiltinPair (PAsData PInteger) (PAsData PInteger))
 built3 = ppairDataBuiltin # int3 # int4
+-- ghci> evalT built3
+-- Right (Script {unScript = Program {_progAnn = (), _progVer = Version () 1 0 0, _progTerm = Constant () (Some (ValueOf (DefaultUniApply (DefaultUniApply DefaultUniProtoPair DefaultUniData) DefaultUniData)
+--  (I 3,I 4)))}},
+-- ExBudget {exBudgetCPU = ExCPU 191611, exBudgetMemory = ExMemory 632},[])
 fst3 = pfstBuiltin # built3
 snd3 = psndBuiltin # built3
 
+-- data PBuiltinPair (a :: PType) (b :: PType) (s :: S)
 
 built56 :: Term s (PBuiltinPair (PAsData PInteger) (PAsData PInteger))
 built56 = ppairDataBuiltin # int5 # int6
@@ -1359,6 +1572,15 @@ pluBuiltListPairAddOn = pcons # built910 # pluBuiltListPair
 -- fPIntToInt :: Term s PInteger -> Integer
 -- fPIntToInt pi = plift pi
 
+--  "contributorsMap" ':= PBuiltinList (PAsData (PTuple (PAsData PPubKeyHash) PInteger)) ] ))
+-- type PTuple a b = PDataSum '['["_0" := a, "_1" := b]]
+
+-- newtype PDataSum defs s
+-- A sum of PDataRecords. The underlying representation is the Constr constructor, 
+-- where the integer is the index of the variant and the list is the record.
+-- Constructors
+-- PDataSum (NS (Compose (Term s) PDataRecord) defs)
+
 
 emptyPairList :: forall s. Term s (PBuiltinList (PBuiltinPair (PAsData PInteger) (PAsData PInteger)))
 emptyPairList = pcon PNil
@@ -1438,10 +1660,50 @@ int3FromPas = pfromData fst3
 --   :: forall {s :: S}.
 --      Term s (PBuiltinPair (PAsData PInteger) (PAsData PInteger))
 
-myCrowdCurrTokenValue = Plutarch.Api.V1.Value.psingleton # (pcrowdCurrSymb) # ( pcrowdTokenName) # pint1ghci> evalT myCrowdCurrTokenValue
+myCrowdCurrTokenValue = Plutarch.Api.V1.Value.psingleton # (pcrowdCurrSymb) # ( pcrowdTokenName) # (pconstant 1)
+-- ghci> evalT myCrowdCurrTokenValue 
 -- Right (Script {unScript = Program {_progAnn = (), _progVer = Version () 1 0 0, _progTerm = Constant () (Some (ValueOf (DefaultUniApply DefaultUniProtoList (DefaultUniApply (DefaultUniApply DefaultUniProtoPair DefaultUniData) DefaultUniData)) 
 -- [(B "\219\186\180|\246\DLE\146\GS\184\226f\195t|\211\147\219o\157K~\184\227H\221\235\&9q",Map [(B "CrowdFundingToken",I 1)])]))}},
 --ExBudget {exBudgetCPU = ExCPU 2297429, exBudgetMemory = ExMemory 7558},[])
+
+someAdaTokenValue = Plutarch.Api.V1.Value.psingleton # (padaSymbol) # ( padaToken) # int1
+
+-- ghci> evalT int1
+-- Right (Script {unScript = Program {_progAnn = (), _progVer = Version () 1 0 0, _progTerm = Constant () 
+-- (Some (ValueOf DefaultUniInteger 12))}},ExBudget {exBudgetCPU = ExCPU 23100, exBudgetMemory = ExMemory 200},[])
+-- ghci> evalT someAdaTokenValue 
+-- Right (Script {unScript = Program {_progAnn = (), _progVer = Version () 1 0 0, _progTerm = Constant () (Some (ValueOf (DefaultUniApply DefaultUniProtoList (DefaultUniApply (DefaultUniApply DefaultUniProtoPair DefaultUniData) DefaultUniData)) 
+-- [(B "",Map [(B "",I 12)])]))}},
+-- ExBudget {exBudgetCPU = ExCPU 2228429, exBudgetMemory = ExMemory 7258},[])
+
+-- adaPlusCrowdUnion = Plutarch.Api.V1.Value.pleftBiasedCurrencyUnion # myCrowdCurrTokenValue # someAdaTokenValue
+
+adaPlusCrowdUnion = someAdaTokenValue <> myCrowdCurrTokenValue 
+
+
+myCrowdCurrTokenValue2 = Plutarch.Api.V1.Value.psingleton # (pcrowdCurrSymb) # ( pcrowdTokenName) # (pconstant 1)
+someAdaTokenValue2 = Plutarch.Api.V1.Value.psingleton # (padaSymbol) # ( padaToken) # int1
+adaPlusCrowdUnion2 = someAdaTokenValue <> myCrowdCurrTokenValue 
+
+pbool2Values = someAdaTokenValue2 #== adaPlusCrowdUnion2
+-- ghci> evalT pbool2Values 
+-- Right (Script {unScript = Program {_progAnn = (), _progVer = Version () 1 0 0, _progTerm = Constant () 
+-- (Some (ValueOf DefaultUniBool False))}},
+-- ExBudget {exBudgetCPU = ExCPU 31974502, exBudgetMemory = ExMemory 90441},[])
+
+-- ghci> evalT adaPlusCrowdUnion 
+-- Right (Script {unScript = Program {_progAnn = (), _progVer = Version () 1 0 0, _progTerm = Constant () (Some (ValueOf (DefaultUniApply DefaultUniProtoList (DefaultUniApply (DefaultUniApply DefaultUniProtoPair DefaultUniData) DefaultUniData)) 
+-- [(B "",Map [(B "",I 12)]),(B "\219\186\180|\246\DLE\146\GS\184\226f\195t|\211\147\219o\157K~\184\227H\221\235\&9q",
+-- Map [(B "CrowdFundingToken",I 1)])]))}},
+-- ExBudget {exBudgetCPU = ExCPU 27944664, exBudgetMemory = ExMemory 81818},[])
+
+
+-- ghci> :t myCrowdCurrTokenValue
+-- myCrowdCurrTokenValue
+--   :: forall {s :: S}. Term s (PValue 'Sorted 'NonZero)
+-- PTxOut (Term s (PDataRecord '["address" := PAddress, "value" := PValue 'Sorted 'Positive, "datum" := POutputDatum, "referenceScript" := PMaybeData PScriptHash]))
+myCrowdCurrTokenValue3 :: forall {s :: S}. Term s (PValue 'Sorted 'Positive)
+myCrowdCurrTokenValue3 = Plutarch.Api.V1.Value.pconstantPositiveSingleton  (pcrowdCurrSymb)  ( pcrowdTokenName)  (pconstant 1)
 
 
 pcrowdTokenName :: (Term s PTokenName)
@@ -1618,7 +1880,8 @@ fieldsOf = plam $ \x -> psndBuiltin #$ pasConstr # x
 --   [PlutusTx.toData (), PlutusTx.toData (1 :: Integer), PlutusTx.toData ()] @> "It should succeed when given 1"
 
 pcrowdValidatorWTest :: TestTree
-pcrowdValidatorWTest = tryFromPTerm "sample validator" (pcrowdValidatorW # (pdata pubKeyHashTest1)) $ do
+pcrowdValidatorWTest = tryFromPTerm "sample validator" (pcrowdValidatorW ) $ do
+-- pcrowdValidatorWTest = tryFromPTerm "sample validator" (pcrowdValidatorW # (pdata pubKeyHashTest1)) $ do
   [PlutusTx.toData datumCrowdVal14aClose, PlutusTx.toData redeemCrowdCloseBuiltin, PlutusTx.toData mockCtxV2] @> "It should succeed when given 1"
 
 -- pcrowdValidatorWTest = tryFromPTerm "sample validator" (pcrowdValidatorW # (pdata pubKeyHashTest1)) $ do
@@ -1639,13 +1902,15 @@ pcrowdValidatorWTest = tryFromPTerm "sample validator" (pcrowdValidatorW # (pdat
 
 
 pcrowdValidatorWTest13a :: TestTree
-pcrowdValidatorWTest13a = tryFromPTerm "sample validator" (pcrowdValidatorW # (pdata pubKeyHashTest1)) $ do
-  [PlutusTx.toData datumCrowdVal13aCloseBuiltin, PlutusTx.toData redeemCrowdCloseBuiltin, PlutusTx.toData mockCtxVal13a] @> "It should fail when Target no reached"
+pcrowdValidatorWTest13a = tryFromPTerm "sample validator" (pcrowdValidatorW) $ do
+-- pcrowdValidatorWTest13a = tryFromPTerm "sample validator" (pcrowdValidatorW # (pdata pubKeyHashTest1)) $ do
+  [PlutusTx.toData datumCrowdVal13aCloseBuiltin, PlutusTx.toData redeemCrowdCloseBuiltin, PlutusTx.toData mockCtxVal13a] @> "All CrowdFunding validations need to pass"
        
 
 pcrowdValidatorWTest14a :: TestTree
-pcrowdValidatorWTest14a = tryFromPTerm "sample validator" (pcrowdValidatorW # (pdata pubKeyHashTest1)) $ do
-  [PlutusTx.toData datumCrowdBuiltin, PlutusTx.toData redeemCrowdCloseBuiltin, PlutusTx.toData mockCtxVal14a] @> "It should fail when Target no reached"
+pcrowdValidatorWTest14a = tryFromPTerm "sample validator" (pcrowdValidatorW) $ do
+-- pcrowdValidatorWTest14a = tryFromPTerm "sample validator" (pcrowdValidatorW # (pdata pubKeyHashTest1)) $ do
+  [PlutusTx.toData datumCrowdBuiltin, PlutusTx.toData redeemCrowdCloseBuiltin, PlutusTx.toData mockCtxVal14a] @> "All CrowdFunding validations need to pass"
         
 
 main :: IO ()

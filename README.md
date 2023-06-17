@@ -1,5 +1,9 @@
 # Plutarch CrowdFunding
-Optimized Crowdfunding compared to earlier one done on plutus apps.
+Optimized CrowdFunding smart contract on Plutarch
+
+
+
+![image-20230616205650516](Images/image-20230616205650516.png)
 
 
 

@@ -148,10 +148,11 @@ data PRedeem (s :: S) =
         ( Term 
           s 
           ( PDataRecord 
-          '["contribution" ':= PInteger])) 
+          '["contribution" ':= (PTuple (PPubKeyHash) (PInteger) )])) 
       | PClose (Term s (PDataRecord '[]))
  deriving stock (Generic)
  deriving anyclass (PlutusType, PIsData, PEq, PShow)
+
 ```
 
 

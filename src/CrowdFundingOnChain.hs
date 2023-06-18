@@ -199,10 +199,13 @@ data PRedeem (s :: S) =
         ( Term 
           s 
           ( PDataRecord 
-          '["contribution" ':= PInteger])) 
+          '["contribution" ':= (PTuple (PPubKeyHash) (PInteger) )])) 
       | PClose (Term s (PDataRecord '[]))
  deriving stock (Generic)
  deriving anyclass (PlutusType, PIsData, PEq, PShow)
+
+
+
 
 instance DerivePlutusType PRedeem where
   type DPTStrat _ = PlutusTypeData 
@@ -291,7 +294,7 @@ pcrowdValidator = phoistAcyclic $ plam $ \dat redeemer ctx -> unTermCont $  do
   -- PLowerBound lb0 <- pmatchC vrF.from
   -- ppos0 <- pletFieldsC @'["_0"] lb0
   -- PFinite ((pfield @"_0" #) -> pf0) <- pmatchC ppos0._0
-  -----  finalPpos0 <- pletFieldsC @'["_0"] pf0  - this does not work
+  -- ---  finalPpos0 <- pletFieldsC @'["_0"] pf0  - this does not work
   PInterval iv' <- pmatchC infoF.validRange
   ivf <- pletAllC iv'
   PLowerBound lb <- pmatchC ivf.from
@@ -311,9 +314,9 @@ pcrowdValidator = phoistAcyclic $ plam $ \dat redeemer ctx -> unTermCont $  do
   -- allInputs <- pletC infoF.inputs
   let ownInput = ptryOwnInput # infoF.inputs # ownRef      -- so this actually implicitly is only 1 possible. -- cause each SCript UTXO calls validator each time separately
   -- let ownInput = ptryOwnInput # infoF.inputs # (pfromData pSp0) 
-  -- ownInput - PTxInInfo (Term s (PDataRecord '["outRef" := PTxOutRef, "resolved" := PTxOut]))
-  --     Also ownInput should only be 1 and that should have the datum. 
-  --     it can have other UTXO not own which are Beneficiary's for collateral eg.
+  -- ownInput <- PTxInInfo (Term s (PDataRecord '["outRef" := PTxOutRef, "resolved" := PTxOut]))
+      -- Also ownInput should only be 1 and that should have the datum. 
+      -- it can have other UTXO not own which are Beneficiary's for collateral eg.
   ownInputF <- pletFieldsC @'["value", "address", "datum"] ownInput 
   let inDatum = pfromPDatum @PDat # (ptryFromInlineDatum # ownInputF.datum)
   inDatumOnUtxo <- pletFieldsC @'["beneficiary", "deadline", "aCurrency", "aToken", "targetAmount", "actualtargetAmountsoFar", "contributorsMap"] inDatum 
@@ -387,6 +390,7 @@ pcrowdValidator = phoistAcyclic $ plam $ \dat redeemer ctx -> unTermCont $  do
   let pval_4 = 
             -- output Datum back to script CrowdFund token should be there only 1 qty
             (pvalueOf # ownOutputF.value # datumOnOutUtxoF.aCurrency # datumOnOutUtxoF.aToken #== 1)  #&&
+
             -- total contributions (map) on datum in output written back to script should be equal total contributions on datum on the UTXO being spent + Contribution now in Redeem
               (outContributionMapValue #== inDatumPlusRedeemVal )
                  
@@ -547,6 +551,7 @@ pcrowdValidator = phoistAcyclic $ plam $ \dat redeemer ctx -> unTermCont $  do
 pcrowdValidatorW :: ClosedTerm (PValidator)
 pcrowdValidatorW = plam $ \datum redeemer ctx' -> unTermCont $ do 
 -- pcrowdValidatorW = plam $ \ph datum redeemer ctx' -> unTermCont $ do 
+  -- pure $ perror
   (dat, _) <- ptryFromC @PDat datum 
   (redmr, _) <- ptryFromC @PRedeem redeemer 
   pure $ popaque $ pcrowdValidator # dat # redmr # ctx'
@@ -652,11 +657,14 @@ pExtractContribPBuiltInListTuple = phoistAcyclic $
         
   )
 
+
 getContributionRedeemer :: Term s  (PRedeem :--> PInteger)
 getContributionRedeemer = phoistAcyclic $
   plam $ \red -> (pmatch red $ \case
                     PContribute pc ->
-                      plet (pfield @"contribution" # pc) $ \cont -> cont
+                      -- plet (pfield @"contribution" # pc) $ \cont -> cont
+                      plet (pfield @"contribution" # pc) $ \cont -> 
+                        pfromData ((psndBuiltin # (pfromData (Plutarch.Api.V1.Tuple.pbuiltinPairFromTuple  cont)) )  )
                     PClose _ -> (pconstant 0)
                  )
 
@@ -725,6 +733,11 @@ beneficiaryHash :: LedgerApiV2.PubKeyHash    --- B.ByteString
 beneficiaryHash = "0e97aa033ceee762c25285cdcc94287178f01b45a585fd0d4da8387a"  -- Beneficiary wallet
 
 
+contributor1Hash :: LedgerApiV2.PubKeyHash    --- B.ByteString
+contributor1Hash = "8c573e818f35a8fa8a693933c396561b0622a88bbf34952c4d572cd7"  -- Contributor wallet
+
+
+
 pubKeyHashTest1 :: Term s PPubKeyHash
 pubKeyHashTest1 = pconstant beneficiaryHash
 
@@ -754,6 +767,12 @@ datumCrowd = Dat {
                            , targetAmount = targetAmount
                            , actualtargetAmountsoFar = 20000000
                            , contributorsMap = []}
+
+
+
+
+
+
 
 
 -- validation 13 a - Success
@@ -992,6 +1011,15 @@ crTxOutVal13aTest1OutForInput = LedgerApiV2.TxOut { LedgerApiV2.txOutAddress = c
 }
 
 
+
+
+
+
+
+
+
+
+
 txInVal13aScriptUtxo :: LedgerApiV2.TxInInfo
 txInVal13aScriptUtxo = LedgerApiV2.TxInInfo {
            LedgerApiV2.txInInfoOutRef = lTxOutRef,
@@ -1020,15 +1048,6 @@ lGetTxId = "sampleTestTxId"
 
 
 
--- -- Validation#4
--- -- this test will have tx-in 2 ada, output Datum 32 Ada - so 1 contributor 
--- crTxOutVal4Test1Out :: V2LedgerTx.TxOut
--- crTxOutVal4Test1Out = V2LedgerTx.TxOut { V2LedgerTx.txOutAddress = crAddress1,
---              V2LedgerTx.txOutDatum  = (rawDatToOutputDatum cFDatumRawVal4TxOut), 
---              V2LedgerTx.txOutReferenceScript = Nothing,
---              V2LedgerTx.txOutValue = singleTonCF <> ada30 <> minAda   --- valueCsTk
-
--- }
 
 
 
@@ -1045,6 +1064,118 @@ cFDatum1BuiltInData rd = (PlutusTx.toBuiltinData rd)
 -- Function - takes Raw Dat and returns OutputDatum
 rawDatToOutputDatum :: Dat -> LedgerApiV2.OutputDatum
 rawDatToOutputDatum rd = cfDatumOutputDatum (cFdatum1 (cFDatum1BuiltInData rd))
+
+
+
+
+-- Validation 4 - Success - 
+
+
+ada50 :: LedgerApiV2.Value
+ada50 = PlutusLedgerApi.V2.singleton adaSymbol adaToken 50000000
+
+ada90 :: LedgerApiV2.Value
+ada90 = PlutusLedgerApi.V2.singleton adaSymbol adaToken 90000000
+
+
+contributorAmount4a :: Integer
+contributorAmount4a = 40000000   -- 40 Ada contribution
+
+redeemCrowdContribute4a :: Redeem
+redeemCrowdContribute4a = Contribute {  
+                             contribution = ("0e97aa033ceee762c25285cdcc94287178f01b45a585fd0d4da8387a", contributorAmount4a)
+                            }
+
+redeemCrowdContributeBuiltin4a = PlutusTx.toBuiltinData redeemCrowdContribute4a
+
+
+
+
+myRedeemer4aMap :: Map ScriptPurpose Redeemer
+myRedeemer4aMap = fromList [((Spending (TxOutRef "" 1), Redeemer redeemCrowdContributeBuiltin4a))]
+
+-- Datums
+datumCrowdVal4aRedeemIn :: Dat
+datumCrowdVal4aRedeemIn = Dat { 
+                             beneficiary =  beneficiaryHash
+                           , deadline = crowdDeadline
+    -- https://preview.cardanoscan.io/token/d1c14384a6e806c521bff39b0c98518576a29727ac2b5f029cf5b9be4d7943726f776446756e64?tab=transactions
+                           -- , OnChain.aCurrency = "d1c14384a6e806c521bff39b0c98518576a29727ac2b5f029cf5b9be"
+                           , aCurrency = dCurrencySymbol
+                           , aToken = dToken
+                           , targetAmount = targetAmount
+                           , actualtargetAmountsoFar = 52000000      -- 52 Ada so target reached.
+                           , contributorsMap = [(contributor1Hash, 50000000)]}
+
+
+datumCrowdVal4aRedeemOut :: Dat
+datumCrowdVal4aRedeemOut = Dat { 
+                             beneficiary =  beneficiaryHash
+                           , deadline = crowdDeadline
+    -- https://preview.cardanoscan.io/token/d1c14384a6e806c521bff39b0c98518576a29727ac2b5f029cf5b9be4d7943726f776446756e64?tab=transactions
+                           -- , OnChain.aCurrency = "d1c14384a6e806c521bff39b0c98518576a29727ac2b5f029cf5b9be"
+                           , aCurrency = dCurrencySymbol
+                           , aToken = dToken
+                           , targetAmount = targetAmount
+                           , actualtargetAmountsoFar = 92000000      -- 92 Ada so target reached.
+                           , contributorsMap = [(contributor1Hash, 40000000), (contributor1Hash, 50000000)]}
+
+datumCrowdVal4aRedeemBuiltinIn = PlutusTx.toBuiltinData datumCrowdVal4aRedeemIn
+
+datumCrowdVal4aRedeemBuiltinOut = PlutusTx.toBuiltinData datumCrowdVal4aRedeemOut
+
+
+datumCrowdVal4aMap :: Map DatumHash Datum
+datumCrowdVal4aMap = fromList [(DatumHash "datumCrowd", Datum datumCrowdVal4aRedeemBuiltinOut)]
+
+
+-- Inputs
+crTxOutVal4aTest1OutForInput :: LedgerApiV2.TxOut
+crTxOutVal4aTest1OutForInput = LedgerApiV2.TxOut { LedgerApiV2.txOutAddress = crAddress1,
+             LedgerApiV2.txOutDatum  = (rawDatToOutputDatum datumCrowdVal4aRedeemIn), 
+             LedgerApiV2.txOutReferenceScript = Nothing,
+             LedgerApiV2.txOutValue =  ada50  <> minAda <> valueCsTk 
+
+}
+
+-- Outputs
+crTxOutVal4aTest1OutForOutput :: LedgerApiV2.TxOut
+crTxOutVal4aTest1OutForOutput = LedgerApiV2.TxOut { LedgerApiV2.txOutAddress = crAddress1,
+             LedgerApiV2.txOutDatum  = (rawDatToOutputDatum datumCrowdVal4aRedeemOut), 
+             LedgerApiV2.txOutReferenceScript = Nothing,
+             LedgerApiV2.txOutValue =  ada90  <> minAda <> valueCsTk 
+
+}
+
+txInVal4aScriptUtxo :: LedgerApiV2.TxInInfo
+txInVal4aScriptUtxo = LedgerApiV2.TxInInfo {
+           LedgerApiV2.txInInfoOutRef = lTxOutRef,
+           LedgerApiV2.txInInfoResolved = crTxOutVal4aTest1OutForInput
+}
+
+
+mockCtxVal4a :: ScriptContext
+mockCtxVal4a =
+  ScriptContext
+    (TxInfo
+      [txInVal4aScriptUtxo]                              -- input
+      mempty                                             -- referenceInputs
+      -- mempty                                             -- outputs
+      [crTxOutVal4aTest1OutForOutput]                      -- outputs
+      mempty                                             -- fee
+      mempty                                             -- mint
+      mempty                                             -- dcert
+      myStake1Map                                        -- wdrl   
+      (interval (POSIXTime 1671159025000) (POSIXTime 1671159025200))   -- validRange  Datum 1671159023000  -- Success case - as datum deadline LESS than slot - so we passed deadline
+      -- (interval (POSIXTime 1671159021000) (POSIXTime 1671159021200))      -- validRange    Datum 1671159023000  -- Fail case - Datum > Slot
+      [beneficiaryHash]                                  -- signatories - txInfoSignatories
+      myRedeemer4aMap                                     -- redeemers --- txInfoRedeemers
+      datumCrowdVal4aMap                                        -- datums
+      ""                                                 -- id 
+    )
+    -- (Spending (TxOutRef "" 1))
+    (Spending ( lTxOutRef))
+
 
 
 
@@ -2003,6 +2134,15 @@ pcrowdValidatorWTest = tryFromPTerm "sample validator" (pcrowdValidatorW ) $ do
 
 
 
+pcrowdValidatorWTest4a :: TestTree
+pcrowdValidatorWTest4a = tryFromPTerm "sample validator" (pcrowdValidatorW) $ do
+-- pcrowdValidatorWTest13a = tryFromPTerm "sample validator" (pcrowdValidatorW # (pdata pubKeyHashTest1)) $ do
+  [PlutusTx.toData datumCrowdVal4aRedeemBuiltinIn, PlutusTx.toData redeemCrowdContributeBuiltin4a, PlutusTx.toData mockCtxVal4a] @> "All CrowdFunding validations need to pass"
+  -- [PlutusTx.toData datumCrowdVal4aRedeemBuiltinIn, PlutusTx.toData redeemCrowdContributeBuiltin4a, PlutusTx.toData mockCtxVal13a] @> "All CrowdFunding validations need to pass"
+  -- [PlutusTx.toData datumCrowdVal13aCloseBuiltin, PlutusTx.toData redeemCrowdContribute4a, PlutusTx.toData mockCtxVal13a] @> "All CrowdFunding validations need to pass"
+       
+   
+
 pcrowdValidatorWTest13a :: TestTree
 pcrowdValidatorWTest13a = tryFromPTerm "sample validator" (pcrowdValidatorW) $ do
 -- pcrowdValidatorWTest13a = tryFromPTerm "sample validator" (pcrowdValidatorW # (pdata pubKeyHashTest1)) $ do
@@ -2024,7 +2164,8 @@ main = do
       [ -- pcrowdValidatorWTest ,
         -- pcrowdValidatorWTest
         -- pcrowdValidatorWTest14a
-        pcrowdValidatorWTest13a
+        pcrowdValidatorWTest4a
+        -- pcrowdValidatorWTest13a
 
       -- , sampleFunctionTest
       ]

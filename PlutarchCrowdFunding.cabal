@@ -136,6 +136,7 @@ library
     , QuickCheck
     , containers
     -- , plutus-script-utils
+    -- , plutus-ledger -any
 
   hs-source-dirs:  src
 
